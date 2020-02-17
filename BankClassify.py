@@ -12,7 +12,7 @@ class BankClassify():
     def __init__(self, data="AllData.csv"):
         """Load in the previous data (by default from AllData.csv) and initialise the classifier"""
         if os.path.exists(data):
-            self.prev_data = pd.read_csv(data)
+            self.prev_data = pd.read_csv(data).drop_duplicates('desc').reset_index(drop=True)
         else:
             self.prev_data = pd.DataFrame(columns=['date', 'desc', 'amount', 'cat'])
 
@@ -72,8 +72,18 @@ class BankClassify():
 
         categories = self._read_categories()
 
-        for index, row in df.iterrows():
+        # Fill in already known categories
+        for index, row in self.prev_data.iterrows():
+            df.loc[df['desc'] == row['desc'], 'cat'] = row['cat']
 
+        # Calculate how many unique descriptions there are so we don't duplicate work
+        df_dedup = df.drop_duplicates('desc')
+        dup_counts = pd.DataFrame(df['desc'].value_counts().reset_index())
+        dup_counts.columns = ['desc', 'count']
+        merged = pd.merge(df_dedup, dup_counts, on='desc')
+        merged = merged[merged['cat'] == ''].reset_index(drop=True)
+
+        for index, row in merged.iterrows():
             # Generate the category numbers table from the list of categories
             cats_list = [[idnum, cat] for idnum, cat in categories.items()]
             cats_table = tabulate(cats_list)
@@ -92,36 +102,42 @@ class BankClassify():
             print(cats_table)
             print("\n\n")
             # Print transaction
-            print("On: %s\t %.2f\n%s" % (row['date'], row['amount'], row['desc']))
+            print("On: %s\t Amount: %.2f\t Occur: %d\t Prog: %d/%d\n%s" % (row['date'], row['amount'], row['count'], index + 1, merged.shape[0], row['desc']))
             print(Fore.RED  + Style.BRIGHT + "My guess is: " + str(guess) + Fore.RESET)
 
-            input_value = input("> ")
+            category = None
 
-            if input_value.lower() == 'q':
-                # If the input was 'q' then quit
-                return df
-            if input_value == "":
-                # If the input was blank then our guess was right!
-                df.at[index, 'cat'] = guess
-                self.classifier.update([(stripped_text, guess)])
-            else:
-                # Otherwise, our guess was wrong
-                try:
-                    # Try converting the input to an integer category number
-                    # If it works then we've entered a category
-                    category_number = int(input_value)
-                    category = categories[category_number]
-                except ValueError:
-                    # Otherwise, we've entered a new category, so add it to the list of
-                    # categories
-                    category = input_value
-                    self._add_new_category(category)
-                    categories = self._read_categories()
+            while not category:
+                input_value = input("> ")
 
-                # Write correct answer
-                df.at[index, 'cat'] = category
-                # Update classifier
-                self.classifier.update([(stripped_text, category)   ])
+                if input_value.lower() == 'q':
+                    # If the input was 'q' then quit
+                    return df
+                if input_value == "":
+                    # If the input was blank then our guess was right!
+                    df.loc[df['desc'] == row['desc'], 'cat'] = guess
+                    self.classifier.update([(stripped_text, guess)])
+                    break
+                else:
+                    # Otherwise, our guess was wrong
+                    try:
+                        # Try converting the input to an integer category number
+                        # If it works then we've entered a category
+                        category_number = int(input_value)
+                        category = categories[category_number]
+                    except ValueError:
+                        # Otherwise, we've entered a new category, so add it to the list of
+                        # categories
+                        category = input_value
+                        self._add_new_category(category)
+                        categories = self._read_categories()
+                    except KeyError:
+                        print("Invalid selection")
+
+                    # Write correct answer
+                    df.loc[df['desc'] == row['desc'], 'cat'] = category
+                    # Update classifier
+                    self.classifier.update([(stripped_text, category)])
 
         return df
 
@@ -185,7 +201,7 @@ class BankClassify():
         """Extract tokens from a given string"""
         # TODO: Extend to extract words within words
         # For example, MUSICROOM should give MUSIC and ROOM
-        tokens = self._split_by_multiple_delims(doc, [' ', '/'])
+        tokens = self._split_by_multiple_delims(doc, [' ', '/', '-'])
 
         features = {}
 
